@@ -1,0 +1,41 @@
+# Build products
+.build/
+build/
+.swiftpm/
+*.dSYM
+*.dSYM.zip
+
+# Tokens and local config. The app reads tokens from the environment, but the
+# launch agent installer writes them to a file; never commit it.
+secrets.env
+*.env
+!*.env.example
+config.json
+
+# Sources/probe and Sources/probe3 are deliberately NOT ignored. They look like
+# throwaway harnesses, but Package.swift declares both as targets with explicit
+# paths, and SwiftPM fails the whole build when a declared target path is
+# missing:
+#   error: invalid custom path 'Sources/probe' for target 'probe'
+# `make probe`, `swift test` and Scripts/e2e.sh all need them, so they are
+# ordinary source.
+
+# Xcode, in case the package is ever opened directly. Nothing here is a build
+# product of the Makefile flow, but SwiftPM writes some of it.
+*.xcuserstate
+xcuserdata/
+DerivedData/
+*.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSStore
+._*
+
+# Editors
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

@@ -1,0 +1,30 @@
+{
+  "pollIntervalSeconds": 60,
+  "sources": [
+    {
+      "kind": "github",
+      "name": "ciStatus · main",
+      "owner": "YOUR_ORG",
+      "repo": "YOUR_REPO",
+      "branch": "main",
+      "strategy": "auto",
+      "tokenEnv": "GITHUB_TOKEN"
+    },
+    {
+      "kind": "vercel",
+      "name": "web · production",
+      "projectId": "prj_YOUR_PROJECT_ID",
+      "branch": "main",
+      "teamId": "team_YOUR_TEAM_ID",
+      "tokenEnv": "VERCEL_TOKEN"
+    },
+    {
+      "kind": "sentry",
+      "name": "Sentry · web",
+      "org": "your-org",
+      "project": "web",
+      "newWithinHours": 24,
+      "tokenEnv": "SENTRY_TOKEN"
+    }
+  ]
+}
