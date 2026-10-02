@@ -34,6 +34,19 @@ fi
 # Read the version from git when available so a build can be traced back.
 VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "dev")"
 
+# CFBundleShortVersionString has to be dotted integers or macOS refuses to treat
+# the bundle as a real app, and `git describe` hands back things that are not
+# that shape: a "v1.2.3" tag, or a bare commit hash when the checkout has no
+# tags at all (a shallow CI clone, for instance). Peel the tag prefix and the
+# -N-gHASH suffix, then fall back to 0.0.0 rather than emitting a version
+# macOS would choke on. The unpeeled value is kept as CFBundleVersion, which is
+# allowed to be an arbitrary build identifier, so a shipped app can still be
+# traced back to the commit it came from.
+SHORT_VERSION="$(printf '%s' "$VERSION" | sed -E 's/^v//; s/-.*$//')"
+if ! [[ "$SHORT_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+  SHORT_VERSION="0.0.0"
+fi
+
 cat > "$OUTPUT/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -46,7 +59,7 @@ cat > "$OUTPUT/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key>                    <string>$APP_NAME</string>
   <key>CFBundleDisplayName</key>             <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>             <string>APPL</string>
-  <key>CFBundleShortVersionString</key>      <string>$VERSION</string>
+  <key>CFBundleShortVersionString</key>      <string>$SHORT_VERSION</string>
   <key>CFBundleVersion</key>                 <string>$VERSION</string>
   <!-- No Dock icon and no app menu: this is a menu bar extra. -->
   <key>LSUIElement</key>                     <true/>

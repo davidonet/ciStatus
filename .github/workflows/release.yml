@@ -1,0 +1,109 @@
+# Build an installable CIStatus.app and publish it as a GitHub release.
+#
+# The app is a macOS menu bar extra, so this has to run on a macOS runner: Swift
+# is a macOS toolchain and the bundle needs Info.plist plus a code signature.
+# A Linux runner cannot produce a .app that macOS will launch.
+#
+# Triggers:
+#   push tags v*    build, test, and attach the DMG to a release
+#   push to main    run the tests, so a broken commit is caught before tagging
+#
+# Signing is ad hoc, matching Scripts/build-app.sh. That produces an app which
+# runs on the machine that built it and any other Mac, but Gatekeeper will ask
+# the user to confirm on first open (right click > Open). Notarising it needs an
+# Apple Developer ID certificate, which is a separate step; see README.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  # `contents: write` is only granted to the release job, so a compromised test
+  # or build step cannot push to the repository.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          # Full history so build-app.sh can read the version from the tag via
+          # `git describe`. A shallow checkout has no tags and the version
+          # silently falls back to a commit hash.
+          fetch-depth: 0
+
+      - name: Build universal binary and bundle the app
+        run: |
+          # Both slices, so the DMG runs on Apple silicon and on Intel. The app
+          # deploys to macOS 13, which still has a large Intel install base.
+          swift build -c release --arch arm64 --arch x86_64
+          ./Scripts/build-app.sh build/CIStatus.app
+
+      - name: Show what was built
+        run: |
+          # Fail loudly here rather than shipping a bundle for one architecture
+          # only, which would be a silent break for half the users.
+          lipo -info build/CIStatus.app/Contents/MacOS/CIStatus
+          codesign -dv build/CIStatus.app 2>&1 | head -5
+          /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" \
+            build/CIStatus.app/Contents/Info.plist
+
+      - name: Package DMG
+        run: |
+          # A DMG is what a Mac user expects to drag from. The /Applications
+          # symlink is the convention that makes it a one step install.
+          STAGE="$(mktemp -d)"
+          cp -R build/CIStatus.app "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create \
+            -volname "CIStatus" \
+            -srcfolder "$STAGE" \
+            -ov -format UDZO \
+            "build/CIStatus-${{ github.ref_name }}.dmg"
+          rm -rf "$STAGE"
+          ls -lh build/*.dmg
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Re-running a failed job is normal, and the release from the first
+          # attempt is already there, so upload onto it instead of failing with
+          # "release already exists".
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            gh release upload "${{ github.ref_name }}" \
+              "build/CIStatus-${{ github.ref_name }}.dmg" --clobber
+          else
+            gh release create "${{ github.ref_name }}" \
+              "build/CIStatus-${{ github.ref_name }}.dmg" \
+              --verify-tag \
+              --title "CIStatus ${{ github.ref_name }}" \
+              --generate-notes
+          fi
+
+  test:
+    runs-on: macos-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Run tests
+        # Uses the image's default Xcode. Do not hardcode a path here: the
+        # macOS images move fast and a pinned /Applications/Xcode_X.Y.app that
+        # the current image does not ship fails the job outright. To pin a
+        # toolchain, name a macos-* image and select with maxim-lobanov/setup-xcode.
+        run: swift test

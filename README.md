@@ -105,6 +105,36 @@ writes a plist that starts the app at login. Run it without the flag to skip the
 prompts. To undo it: `./Scripts/uninstall-launch-agent.sh`, adding `--tokens` to
 remove the stored tokens as well.
 
+## Releases
+
+`.github/workflows/release.yml` builds the same app and attaches it to a GitHub
+release. Tag and push:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The tag has to start with `v`, and the tests have to pass first, so a release is
+only ever cut from a commit whose 144 unit tests are green. The build is a
+universal binary (Apple silicon and Intel) packaged as a DMG, which users drag
+into `/Applications`.
+
+Pull requests and pushes to `main` run the tests only, without building an app.
+
+Two things worth knowing:
+
+- The app is **ad hoc signed**, because signing is what `build-app.sh` already
+  does and no Developer ID certificate is needed. macOS will therefore ask for a
+  one-time confirmation the first time a user opens it (right click, then Open).
+  Notarising it to remove that prompt needs an Apple Developer Program
+  membership and an Apple secret in the repository; add those steps to the
+  workflow when you have one.
+- The checkout uses `fetch-depth: 0` so `build-app.sh` can read the version from
+  the tag. A shallow clone has no tags, and the app would be stamped `0.0.0`.
+
+`Scripts/e2e.sh` is deliberately not part of CI: it screenshots the real menu
+bar, so it needs a logged in GUI session and a human to look at it.
+
 ## Configuration
 
 Config lives at `~/Library/Application Support/CIStatus/config.json`. Set
