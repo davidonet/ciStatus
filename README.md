@@ -119,6 +119,45 @@ only ever cut from a commit whose 144 unit tests are green. The build is a
 universal binary (Apple silicon and Intel) packaged as a DMG, which users drag
 into `/Applications`.
 
+### Installing a downloaded build
+
+A downloaded app carries a quarantine flag, and because the release is ad hoc
+signed rather than signed by a Developer ID, Gatekeeper refuses to open it:
+
+```
+CIStatus cannot be opened because Apple cannot check it for malicious software.
+```
+
+Open it once by hand and it never asks again:
+
+1. Right click (or Control click) `CIStatus.app` in `/Applications` → **Open**
+2. Confirm **Open** in the dialog that follows
+
+From a terminal, which is what to use on a machine where the right click route
+is awkward:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/CIStatus.app
+```
+
+**"Nothing happens when I open it" is almost always this**, not a broken build.
+The app is a menu bar extra (`LSUIElement`), so it has no Dock icon and no
+window: it either puts a dot in the menu bar or it does not run at all, and a
+refused launch shows no error anywhere on screen. Two checks, in order:
+
+```sh
+pgrep -x CIStatus || xattr -p com.apple.quarantine /Applications/CIStatus.app
+tail -20 ~/Library/Logs/CIStatus/ciStatus.log
+```
+
+A running process with no `starting` line in the log was blocked before it
+executed. A dot missing from the menu bar but a process running means the icon
+is hidden — macOS drops menu bar extras off the left edge when the bar is full,
+and **System Settings → Control Centre** can move it back.
+
+A missing or malformed `config.json` cannot stop the app launching: it starts,
+logs `no config file yet`, and shows a grey dot until targets are added.
+
 Pull requests and pushes to `main` run the tests only, without building an app.
 
 Two things worth knowing:
