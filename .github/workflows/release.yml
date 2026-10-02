@@ -60,6 +60,14 @@ jobs:
 
       - name: Show what was built
         run: |
+          # Record the build layout. The runner's SwiftPM puts products under a
+          # different directory than a local build and does not create the
+          # .build/release symlink, which is what broke two earlier releases;
+          # printing it here means the next mismatch is visible in the log rather
+          # than having to be reconstructed from it.
+          echo "bin path: $(swift build -c release --show-bin-path | tail -1)"
+          find .build -name CIStatus -type f -perm +111 -not -path "*/Objects-normal/*"
+
           # Fail loudly here rather than shipping a bundle for one architecture
           # only, which would be a silent break for half the users.
           lipo -info build/CIStatus.app/Contents/MacOS/CIStatus

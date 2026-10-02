@@ -14,22 +14,48 @@ APP_NAME="CIStatus"
 BUNDLE_ID="dev.dolivari.ciStatus"
 OUTPUT="${1:-build/$APP_NAME.app}"
 
-# Ask SwiftPM where it put the products rather than guessing. .build/release is
-# only a convenience symlink, and it is not always there: a fresh checkout built
-# by a different toolchain, or a build driven through the XCBuild path, can leave
-# the real output in .build/out/Products/Release with no symlink at all, which
-# made this script fail on CI with "No release binary" right after a build that
-# had actually succeeded.
-BUILD_DIR="$(swift build -c "$CONFIG" --show-bin-path 2>/dev/null | tail -1 || true)"
-if [ -z "$BUILD_DIR" ] || [ ! -d "$BUILD_DIR" ]; then
-  BUILD_DIR=".build/$CONFIG"
-fi
+# Find the release binary. There is no single reliable location, and guessing
+# one has broken this script twice on CI, both times immediately after a build
+# that had actually succeeded:
+#
+#   .build/release                    a convenience symlink, not always created
+#   .build/out/Products/Release       the local SwiftPM layout
+#   .build/apple/Products/Release     the layout the GitHub runner's toolchain
+#                                     produces, and it does not create the
+#                                     symlink above
+#
+# `swift build --show-bin-path` is the intended answer, but on the runner it
+# reports a path that does not exist, so it is only trusted once the binary is
+# actually found under it. A directory search is the backstop.
+find_binary() {
+  local candidate
+  for candidate in \
+    "${BIN_DIR:-}" \
+    "$(swift build -c "$CONFIG" --show-bin-path 2>/dev/null | tail -1 || true)" \
+    ".build/$CONFIG" \
+    ".build/out/Products/$CONFIG" \
+    ".build/apple/Products/$CONFIG" \
+    ".build/*/Products/$CONFIG"
+  do
+    if [ -n "$candidate" ] && [ -x "$candidate/$APP_NAME" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
 
-if [ ! -x "$BUILD_DIR/$APP_NAME" ]; then
-  echo "No $CONFIG binary in $BUILD_DIR. Run: swift build -c $CONFIG" >&2
-  # Print the build directory contents: a wrong path here is otherwise very
-  # hard to diagnose from CI logs, where the build itself has already succeeded.
-  ls -la "$BUILD_DIR" 2>&1 | head -20 >&2 || true
+BUILD_DIR="$(find_binary || true)"
+
+if [ -z "$BUILD_DIR" ]; then
+  echo "No $CONFIG binary for $APP_NAME. Run: swift build -c $CONFIG" >&2
+  # Say where it looked. A missing binary is otherwise very hard to diagnose
+  # from a CI log, where the build has already reported success.
+  echo "Searched:" >&2
+  echo "  $(swift build -c "$CONFIG" --show-bin-path 2>/dev/null | tail -1 || echo '(show-bin-path failed)')" >&2
+  for candidate in ".build/$CONFIG" ".build/out/Products/$CONFIG" ".build/apple/Products/$CONFIG"; do
+    echo "  $candidate ($( [ -d "$candidate" ] && ls "$candidate" 2>/dev/null | tr '\n' ' ' || echo missing ))" >&2
+  done
   exit 1
 fi
 
