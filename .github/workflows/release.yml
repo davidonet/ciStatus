@@ -50,7 +50,12 @@ jobs:
         run: |
           # Both slices, so the DMG runs on Apple silicon and on Intel. The app
           # deploys to macOS 13, which still has a large Intel install base.
-          swift build -c release --arch arm64 --arch x86_64
+          #
+          # --product matters. A bare `swift build` also compiles the probe and
+          # probe3 harnesses, which are developer tools, are not part of the app,
+          # and have no reason to hold up a release. Naming the product keeps them
+          # out of this build; the test job still covers them.
+          swift build -c release --arch arm64 --arch x86_64 --product CIStatus
           ./Scripts/build-app.sh build/CIStatus.app
 
       - name: Show what was built
