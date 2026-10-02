@@ -8,6 +8,7 @@ extension Health {
 
 struct MenuContent: View {
     @ObservedObject var monitor: Monitor
+    @ObservedObject var settingsModel: SettingsModel
 
     var body: some View {
         if let error = monitor.configError {
@@ -36,13 +37,44 @@ struct MenuContent: View {
 
         Divider()
 
+        Button("Settings…") {
+            openSettingsWindow()
+        }
         Button("Reload config") {
             monitor.start(configURL: CIStatusPaths.configURL)
+        }
+        Button("Reveal Log in Finder") {
+            revealLog()
         }
         Button("Quit CIStatus") {
             NSApplication.shared.terminate(nil)
         }
     }
+}
+
+/// Shows the log file, creating it first if the app has not logged yet.
+///
+/// A missing file would otherwise open an empty Finder selection and look like
+/// logging is broken, so an empty one is written rather than left absent.
+private func revealLog() {
+    let url = Log.currentURL() ?? Log.defaultURL
+    let manager = FileManager.default
+    if !manager.fileExists(atPath: url.path) {
+        try? manager.createDirectory(at: url.deletingLastPathComponent(),
+                                     withIntermediateDirectories: true)
+        manager.createFile(atPath: url.path, contents: nil)
+    }
+    NSWorkspace.shared.activateFileViewerSelecting([url])
+}
+
+/// Opens the settings window and brings it to the front.
+///
+/// `openWindow` is only in scope inside a `Scene`, and a `MenuBarExtra` menu is
+/// not one, so this goes through the responder chain instead. The action is the
+/// one SwiftUI registers for a `Settings` scene.
+private func openSettingsWindow() {
+    NSApp.activate(ignoringOtherApps: true)
+    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
 }
 
 struct Row: View {

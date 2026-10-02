@@ -25,9 +25,9 @@ public struct VercelProvider: Sendable {
     }
 
     let http: HTTP
-    let source: Config.Source
+    let source: Source
 
-    public init(http: HTTP, source: Config.Source) {
+    public init(http: HTTP, source: Source) {
         self.http = http
         self.source = source
     }
@@ -40,7 +40,8 @@ public struct VercelProvider: Sendable {
                              summary: "projectId is required", detail: nil, url: nil, failingItems: [])
             }
             guard let token = source.token(), !token.isEmpty else {
-                throw ConfigError.missingToken(source: name, env: source.tokenEnv ?? "<unset>")
+throw ConfigError.missingToken(source: name, kind: .vercel,
+                                              enabled: source.usesToken)
             }
             guard let url = URL.build("https://api.vercel.com/v7/deployments", [
                 ("projectId", projectId),

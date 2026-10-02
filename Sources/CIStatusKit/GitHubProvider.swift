@@ -18,7 +18,7 @@ import Foundation
 /// request for lack of permission, which is why the fallback has to be
 /// automatic rather than something you configure by hand.
 public struct GitHubProvider: Sendable {
-    public enum Strategy: String, Decodable, Sendable {
+    public enum Strategy: String, Codable, Sendable {
         case auto
         case checks
         case actions
@@ -101,14 +101,14 @@ public struct GitHubProvider: Sendable {
     }
 
     let http: HTTP
-    let source: Config.Source
+    let source: Source
     let strategy: Strategy
 
     /// Set to a non-`.auto` strategy to bypass the Checks API entirely, which
     /// is what the tests use to exercise the Actions path without a network.
     static var forcedStrategy: Strategy?
 
-    public init(http: HTTP, source: Config.Source) {
+    public init(http: HTTP, source: Source) {
         self.http = http
         self.source = source
         self.strategy = Self.forcedStrategy ?? source.strategy ?? .auto
@@ -126,7 +126,8 @@ public struct GitHubProvider: Sendable {
                              detail: nil, url: nil, failingItems: [])
             }
             guard let token = source.token(), !token.isEmpty else {
-                throw ConfigError.missingToken(source: name, env: source.tokenEnv ?? "<unset>")
+throw ConfigError.missingToken(source: name, kind: .github,
+                                              enabled: source.usesToken)
             }
             guard let base = URL(string: "https://api.github.com/repos/\(owner)/\(repo)") else {
                 throw HTTPError.badURL("https://api.github.com/repos/\(owner)/\(repo)")

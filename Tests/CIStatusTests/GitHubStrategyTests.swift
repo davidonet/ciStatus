@@ -43,16 +43,21 @@ final class StubHTTP: HTTP, @unchecked Sendable {
     }
 }
 
-private func json(_ literal: String) -> Data { Data(literal.utf8) }
+/// Internal rather than private so the discovery tests can share it.
+func json(_ literal: String) -> Data { Data(literal.utf8) }
 
 /// A source with the given strategy, or no strategy key at all.
-private func source(strategy: String? = nil) -> Config.Source {
-    let strategyValue = strategy.map { "\"\($0)\"" } ?? "null"
-    let json = """
-    {"sources":[{"kind":"github","name":"gh","owner":"o","repo":"r","branch":"main",
-     "tokenEnv":"CI_T","strategy":\(strategyValue)}]}
-    """
-    return try! JSONDecoder().decode(Config.self, from: Data(json.utf8)).sources[0]
+///
+/// Answers from a stub token store rather than the real one, so these results do
+/// not depend on whether the machine running them has a GitHub token on disk.
+private func source(strategy: GitHubProvider.Strategy? = nil) -> Source {
+    TokenStore.TestSupport.useReader { [Source.Kind.github: "test-token"] }
+    return Config(
+        tokens: Config.Tokens(github: true),
+        services: Config.Services(github: [
+            .init(owner: "o", repo: "r", branches: ["main"], strategy: strategy)
+        ])
+    ).expandedSources[0]
 }
 
 final class GitHubStrategyTests: XCTestCase {
@@ -64,6 +69,7 @@ final class GitHubStrategyTests: XCTestCase {
 
     override func tearDown() {
         unsetenv("CI_T")
+        TokenStore.TestSupport.use(url: nil)
         GitHubProvider.forcedStrategy = nil
         super.tearDown()
     }
@@ -144,7 +150,7 @@ final class GitHubStrategyTests: XCTestCase {
     func testPinnedChecksDoesNotFallBack() async throws {
         let http = StubHTTP(map: ["/check-runs": { throw HTTPError.status(403, "nope") }])
 
-        let status = await GitHubProvider(http: http, source: source(strategy: "checks")).poll()
+        let status = await GitHubProvider(http: http, source: source(strategy: .checks)).poll()
         XCTAssertEqual(status.health, .unknown)
         XCTAssertEqual(status.summary, "checks not permitted")
         // The user has to be told what to do about it, not just that it broke.
@@ -159,7 +165,7 @@ final class GitHubStrategyTests: XCTestCase {
             "/status": { self.statusPayload }
         ])
 
-        let status = await GitHubProvider(http: http, source: source(strategy: "actions")).poll()
+        let status = await GitHubProvider(http: http, source: source(strategy: .actions)).poll()
         XCTAssertEqual(status.health, .pending)
         XCTAssertFalse(http.requested.contains { $0.contains("/check-runs") },
                        "a pinned strategy should not try the other API")
@@ -235,11 +241,38 @@ final class GitHubStrategyTests: XCTestCase {
         XCTAssertTrue(status.summary.contains("183 more not shown"), status.summary)
     }
 
+    /// A service switched on with no stored token must say where to fix it, and
+    /// offer the command that fixes it.
     func testMissingTokenIsReported() async {
-        unsetenv("CI_T")
         let http = StubHTTP(map: [:])
-        let status = await GitHubProvider(http: http, source: source()).poll()
+        // The source is built first: `source()` installs a token, so emptying it
+        // has to come afterwards.
+        let configured = source()
+        TokenStore.TestSupport.useReader { [:] }
+
+        let status = await GitHubProvider(http: http, source: configured).poll()
         XCTAssertEqual(status.health, .unknown)
-        XCTAssertTrue(status.detail?.contains("CI_T") == true, status.detail ?? "")
+        let detail = status.detail ?? ""
+        XCTAssertTrue(detail.contains("no GitHub token stored"), detail)
+        XCTAssertTrue(detail.contains("--store-token github"), detail)
+        XCTAssertFalse(detail.contains("environment variable"), detail)
+    }
+
+    /// With the service switched off there is no token to look for, so the
+    /// advice is to switch it on rather than to paste a token.
+    func testDisabledServiceIsReportedAsNotEnabled() async {
+        TokenStore.TestSupport.useReader { [.github: "a-real-looking-token"] }
+
+        let disabled = Config.Services(github: [
+            .init(owner: "o", repo: "r", branches: ["main"], strategy: .actions)
+        ])
+        let off = Config(services: disabled).expandedSources[0]
+        XCTAssertFalse(off.usesToken)
+
+        let status = await GitHubProvider(http: StubHTTP(map: [:]), source: off).poll()
+        XCTAssertEqual(status.health, .unknown)
+        let detail = status.detail ?? ""
+        XCTAssertTrue(detail.contains("not enabled"), detail)
+        XCTAssertTrue(detail.contains("tokens"), "should name the config key: \(detail)")
     }
 }

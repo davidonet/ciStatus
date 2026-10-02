@@ -39,10 +39,11 @@ install: build
 	cp -R $(APP) "$(INSTALL_DIR)/$(APP_NAME).app"
 	@echo "Installed $(INSTALL_DIR)/$(APP_NAME).app"
 	@echo
-	@echo "Tokens are read from the environment, so launching from Finder or"
-	@echo "Spotlight will not see them. Launch it from a terminal instead:"
+	@echo "Tokens live in ~/Library/Application Support/CIStatus/tokens.json,"
+	@echo "so the app launches from Finder or Spotlight. Add one from the"
+	@echo "Settings window, or:"
 	@echo
-	@echo "  GITHUB_API_KEY=… VERCEL_API_KEY=… SENTRY_API_KEY=… open -a $(APP_NAME)"
+	@echo "  swift build --product probe && .build/debug/probe --store-token github <token>"
 	@echo
 	@echo "Or use 'make install-and-run' once to set it up for login."
 
@@ -52,24 +53,30 @@ uninstall:
 	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
 	@echo "Removed $(INSTALL_DIR)/$(APP_NAME).app"
 
-# Launching with the environment inherited is the only reliable way to pass
-# tokens, since neither Finder nor `open` forward one.
 .PHONY: run
 run: build
-	@echo "Launching $(APP) with the current environment"
+	@echo "Launching $(APP)"
 	"$(APP)/Contents/MacOS/$(APP_NAME)"
 
-# Installs a LaunchAgent so it starts at login with the tokens loaded from a
-# gitignored file, which removes the manual launch step.
+# Installs a LaunchAgent so it starts at login, which removes the manual launch
+# step.
 .PHONY: install-and-run
 install-and-run: install
-	@echo "For a login item with tokens, run:"
-	@echo "  ./Scripts/install-launch-agent.sh"
+	@echo "For a login item, run:"
+	@echo "  ./Scripts/install-launch-agent.sh --install-tokens"
 
 .PHONY: probe
 probe:
 	@swift build --product probe
-	@./.build/debug/probe "$(HOME)/Library/Application Support/$(APP_NAME)/config.json"
+	@./.build/debug/probe --diagnose "$(HOME)/Library/Application Support/$(APP_NAME)/config.json"
+
+# Says what is stored, what is enabled and what is missing, without polling.
+.PHONY: doctor
+doctor:
+	@swift build --product probe
+	@./.build/debug/probe --tokens
+	@echo
+	@echo "Log: ~/Library/Logs/CIStatus/ciStatus.log"
 
 .PHONY: clean
 clean:

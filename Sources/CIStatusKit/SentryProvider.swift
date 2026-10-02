@@ -15,9 +15,9 @@ public struct SentryProvider: Sendable {
     }
 
     let http: HTTP
-    let source: Config.Source
+    let source: Source
 
-    public init(http: HTTP, source: Config.Source) {
+    public init(http: HTTP, source: Source) {
         self.http = http
         self.source = source
     }
@@ -30,7 +30,8 @@ public struct SentryProvider: Sendable {
                              summary: "org and project are required", detail: nil, url: nil, failingItems: [])
             }
             guard let token = source.token(), !token.isEmpty else {
-                throw ConfigError.missingToken(source: name, env: source.tokenEnv ?? "<unset>")
+throw ConfigError.missingToken(source: name, kind: .sentry,
+                                              enabled: source.usesToken)
             }
 
             let hours = source.newWithinHours ?? 24

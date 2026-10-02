@@ -5,12 +5,15 @@ build/
 *.dSYM
 *.dSYM.zip
 
-# Tokens and local config. The app reads tokens from the environment, but the
-# launch agent installer writes them to a file; never commit it.
+# Tokens live in ~/Library/Application Support/CIStatus/tokens.json, not here.
+# `config.json` is the user's own config and holds no secrets, but it is personal,
+# so keep it out of a shared repository. `secrets.env` is only matched so a file
+# left by an older installer cannot be committed by accident.
 secrets.env
 *.env
 !*.env.example
 config.json
+tokens.json
 
 # Sources/probe and Sources/probe3 are deliberately NOT ignored. They look like
 # throwaway harnesses, but Package.swift declares both as targets with explicit

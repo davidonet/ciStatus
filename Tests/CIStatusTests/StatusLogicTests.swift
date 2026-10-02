@@ -95,28 +95,33 @@ final class StatusLogicTests: XCTestCase {
     /// Building a provider from a config with no `strategy` must not fall back
     /// to a hardcoded default in two different places.
     func testStrategyDefaultsToAuto() throws {
-        let config = try decode("""
-        {"sources":[{"kind":"github","name":"gh","owner":"o","repo":"r","branch":"main","tokenEnv":"T"}]}
-        """)
-        let provider = GitHubProvider(http: HTTP(), source: config.sources[0])
+        let provider = GitHubProvider(http: HTTP(), source: try source(strategy: nil))
         XCTAssertEqual(provider.strategy, .auto)
     }
 
     func testStrategyIsReadFromConfig() throws {
-        for (raw, expected) in [("actions", GitHubProvider.Strategy.actions),
-                                ("checks", GitHubProvider.Strategy.checks),
-                                ("auto", GitHubProvider.Strategy.auto)] {
-            let config = try decode("""
-            {"sources":[{"kind":"github","name":"gh","owner":"o","repo":"r","branch":"main","strategy":"\(raw)"}]}
-            """)
-            XCTAssertEqual(GitHubProvider(http: HTTP(), source: config.sources[0]).strategy, expected)
+        for expected in [GitHubProvider.Strategy.actions,
+                         GitHubProvider.Strategy.checks,
+                         GitHubProvider.Strategy.auto] {
+            let provider = GitHubProvider(http: HTTP(), source: try source(strategy: expected))
+            XCTAssertEqual(provider.strategy, expected)
         }
+    }
+
+    /// A source built straight from the config's `services` section, so the
+    /// strategy tests exercise the same path the app uses.
+    private func source(strategy: GitHubProvider.Strategy?) throws -> Source {
+        let raw = strategy.map { "\"\($0.rawValue)\"" } ?? "null"
+        let config = try decode("""
+        {"services":{"github":[{"owner":"o","repo":"r","branches":["main"],"strategy":\(raw)}]}}
+        """)
+        return config.expandedSources[0]
     }
 
     /// A typo in `strategy` must be a loud config error, not a silent default
     /// that quietly polls the wrong API.
     func testUnknownStrategyIsRejected() {
-        let json = #"{"sources":[{"kind":"github","name":"gh","owner":"o","repo":"r","branch":"main","strategy":"checkz"}]}"#
+        let json = #"{"services":{"github":[{"owner":"o","repo":"r","strategy":"checkz"}]}}"#
         XCTAssertThrowsError(try JSONDecoder().decode(Config.self, from: Data(json.utf8)))
     }
 
@@ -217,51 +222,315 @@ final class StatusLogicTests: XCTestCase {
         let config = try decode("""
         {
           "pollIntervalSeconds": 30,
-          "sources": [
-            {"kind": "github", "name": "gh", "owner": "o", "repo": "r", "branch": "main", "tokenEnv": "T"},
-            {"kind": "vercel", "name": "vc", "projectId": "p1", "branch": "main", "teamId": "t1", "tokenEnv": "T"},
-            {"kind": "sentry", "name": "st", "org": "o", "project": "p", "newWithinHours": 6, "tokenEnv": "T"}
-          ]
+          "tokens": { "github": true, "vercel": true, "sentry": true },
+          "services": {
+            "github": [{ "owner": "o", "repo": "r", "branches": ["main"] }],
+            "vercel": [{ "projectId": "p1", "teamId": "t1", "branches": ["main"] }],
+            "sentry": [{ "org": "o", "project": "p", "newWithinHours": 6 }]
+          }
         }
         """)
         XCTAssertEqual(config.pollIntervalSeconds, 30)
-        XCTAssertEqual(config.sources.count, 3)
-        XCTAssertEqual(config.sources[2].newWithinHours, 6)
-        XCTAssertEqual(config.sources.map(\.kind), [.github, .vercel, .sentry])
+        XCTAssertEqual(config.tokens, Config.Tokens(github: true, vercel: true, sentry: true))
+        XCTAssertEqual(config.services.sentry.first?.newWithinHours, 6)
+
+        let sources = config.expandedSources
+        XCTAssertEqual(sources.count, 3)
+        XCTAssertEqual(sources.map(\.kind), [.github, .vercel, .sentry])
     }
 
-    func testTokenIsReadFromTheEnvironmentNotTheFile() throws {
-        let config = try decode(#"{"sources":[{"kind":"github","name":"gh","tokenEnv":"MY_TOKEN"}]}"#)
-        XCTAssertNil(config.sources[0].token(), "no env var set means no token")
+    /// The token comes from the token file, and an exported variable must not be
+    /// able to supply one: the environment is no longer a token source, so a
+    /// stray `GITHUB_TOKEN` in a shell cannot change what the app authenticates
+    /// with.
+    func testTheEnvironmentCannotSupplyAToken() throws {
+        let config = try decode("""
+        {"tokens":{"github":true},"services":{"github":[{"owner":"o","repo":"r"}]}}
+        """)
+        let source = config.expandedSources[0]
+        XCTAssertTrue(source.usesToken, "the service is switched on")
 
-        setenv("MY_TOKEN", "  secret  ", 1)
-        defer { unsetenv("MY_TOKEN") }
-        XCTAssertEqual(config.sources[0].token(), "secret", "token should be trimmed")
+        // Answered from a fixture, so this does not depend on whether the
+        // machine running the tests has a real token file.
+        TokenStore.TestSupport.useReader { [:] }
+        defer { TokenStore.TestSupport.use(url: nil) }
+
+        setenv("GITHUB_TOKEN", "  from-env  ", 1)
+        defer { unsetenv("GITHUB_TOKEN") }
+        XCTAssertNil(source.token(), "an exported variable is not a token source")
+
+        // The same source does read a stored token, so the nil above is the
+        // environment being ignored and not the store being skipped.
+        TokenStore.TestSupport.useReader { [.github: "from-store"] }
+        XCTAssertEqual(source.token(), "from-store")
+    }
+
+    /// A blank stored token is no token, rather than an empty credential the
+    /// providers would send.
+    func testABlankStoredTokenReadsAsNil() throws {
+        let url = temporaryTokenFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+        TokenStore.TestSupport.use(url: url)
+
+        // Written by hand, since `save` refuses a blank.
+        try #"{"github":"   "}"#.write(to: url, atomically: true, encoding: .utf8)
+        TokenStore.TestSupport.invalidate()
+
+        let config = try decode(#"{"tokens":{"github":true},"services":{"github":[{"owner":"o","repo":"r"}]}}"#)
+        XCTAssertNil(config.expandedSources[0].token())
+    }
+
+    private func temporaryTokenFile() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("cistatus-tokens-\(UUID().uuidString).json")
     }
 
     func testDashboardLinkIsBuiltPerSource() throws {
         let config = try decode("""
         {
-          "sources": [
-            {"kind": "github", "name": "gh", "owner": "o", "repo": "r", "branch": "main"},
-            {"kind": "sentry", "name": "st", "org": "acme", "project": "web"}
-          ]
+          "services": {
+            "github": [{ "owner": "o", "repo": "r", "branches": ["main"] }],
+            "sentry": [{ "org": "acme", "project": "web" }]
+          }
         }
         """)
-        let githubURL = config.sources[0].resolvedDashboardURL
+        let sources = config.expandedSources
+        let githubURL = sources[0].resolvedDashboardURL
         XCTAssertTrue(githubURL?.absoluteString.contains("github.com/o/r/actions") == true)
         // The query item must survive a decode round trip, whatever escaping is used.
         let branchQuery = URLComponents(url: githubURL!, resolvingAgainstBaseURL: false)?
             .queryItems?.first { $0.name == "query" }?.value
         XCTAssertEqual(branchQuery, "branch:main")
 
-        let sentry = config.sources[1].resolvedDashboardURL?.absoluteString ?? ""
+        let sentry = sources[1].resolvedDashboardURL?.absoluteString ?? ""
         XCTAssertTrue(sentry.contains("acme.sentry.io"), sentry)
     }
 
     func testExplicitDashboardURLWins() throws {
-        let config = try decode(#"{"sources":[{"kind":"github","name":"gh","owner":"o","repo":"r","branch":"main","dashboardURL":"https://example.com/x"}]}"#)
-        XCTAssertEqual(config.sources[0].resolvedDashboardURL?.absoluteString, "https://example.com/x")
+        let config = try decode("""
+        {"services":{"github":[{"owner":"o","repo":"r","dashboardURL":"https://example.com/x"}]}}
+        """)
+        XCTAssertEqual(config.expandedSources[0].resolvedDashboardURL?.absoluteString, "https://example.com/x")
+    }
+
+    // MARK: - Config shape
+
+    /// Every service section is optional, so a GitHub-only config is not
+    /// obliged to carry two empty lists it will never use.
+    func testUnusedServiceSectionsAreOptional() throws {
+        let config = try decode(#"{"services":{"github":[{"owner":"o","repo":"r"}]}}"#)
+        XCTAssertEqual(config.services.github.count, 1)
+        XCTAssertTrue(config.services.vercel.isEmpty)
+        XCTAssertTrue(config.services.sentry.isEmpty)
+    }
+
+    /// `branches` is the field most likely to be left out by hand, so omitting
+    /// it must mean main rather than "no branches", which would silently
+    /// produce a target that is never polled.
+    func testOmittedBranchesDefaultsToMain() throws {
+        let config = try decode(#"{"services":{"github":[{"owner":"o","repo":"r"}]}}"#)
+        XCTAssertEqual(config.services.github[0].branches, [])
+        XCTAssertEqual(config.expandedSources.map(\.branch), ["main"])
+    }
+
+    func testOmittedTokenSectionIsEmptyNotAnError() throws {
+        let config = try decode("{}")
+        XCTAssertTrue(config.tokens.isEmpty)
+        XCTAssertTrue(config.expandedSources.isEmpty)
+    }
+
+    /// A config written before `services` existed must fail loudly with advice,
+    /// not load as an empty config that looks like the app lost its setup.
+    func testLegacySourcesConfigIsRejectedWithMigrationAdvice() {
+        let legacy = #"{"sources":[{"kind":"github","name":"gh","owner":"o","repo":"r","branch":"main"}]}"#
+        XCTAssertThrowsError(try decode(legacy)) { error in
+            XCTAssertEqual(error as? ConfigError, .legacySourcesFormat)
+            let message = (error as? LocalizedError)?.errorDescription ?? ""
+            XCTAssertTrue(message.contains("tokens"), "advice should name the new shape: \(message)")
+        }
+    }
+
+    /// One row per branch, so watching three branches makes three menu entries.
+    func testEachBranchBecomesItsOwnRow() throws {
+        let config = try decode("""
+        {"services":{"github":[{"owner":"o","repo":"api","branches":["main","develop","release"]}]}}
+        """)
+        XCTAssertEqual(config.expandedSources.count, 3)
+        XCTAssertEqual(config.expandedSources.map(\.branch), ["main", "develop", "release"])
+        // Labels must stay distinguishable, since that is all the menu shows.
+        XCTAssertEqual(config.expandedSources.map(\.name),
+                       ["api · main", "api · develop", "api · release"])
+    }
+
+    /// Duplicate rows would show the same target twice in the menu and poll it
+    /// twice, so blank and repeated branches are collapsed.
+    func testBlankAndDuplicateBranchesAreCollapsed() throws {
+        let config = try decode("""
+        {"services":{"github":[{"owner":"o","repo":"r","branches":["main","","  main  ","main","dev"]}]}}
+        """)
+        XCTAssertEqual(config.expandedSources.map(\.branch), ["main", "dev"])
+    }
+
+    /// The token section is per service, so every expanded source must inherit
+    /// its own service's variable rather than a shared one.
+    func testEachServiceInheritsItsOwnTokenVariable() throws {
+        let config = try decode("""
+        {
+          "tokens": { "github": true, "vercel": true, "sentry": true },
+          "services": {
+            "github": [{ "owner": "o", "repo": "r" }],
+            "vercel": [{ "projectId": "p1" }],
+            "sentry": [{ "org": "o", "project": "p" }]
+          }
+        }
+        """)
+        XCTAssertEqual(config.expandedSources.map(\.usesToken), [true, true, true])
+        XCTAssertEqual(config.tokens.enabledServices, [.github, .vercel, .sentry])
+    }
+
+    // MARK: - Tokens
+
+    /// A service not listed is off, which keeps a token left over from a service
+    /// you stopped watching from silently keeping it alive.
+    func testUnlistedServicesAreOff() throws {
+        let config = try decode("""
+        {"tokens":{"github":true},"services":{"github":[{"owner":"o","repo":"r"}]}}
+        """)
+        XCTAssertTrue(config.tokens.isEnabled(.github))
+        XCTAssertFalse(config.tokens.isEnabled(.vercel))
+        XCTAssertFalse(config.tokens.isEnabled(.sentry))
+        XCTAssertEqual(config.expandedSources.map(\.usesToken), [true])
+    }
+
+    func testAbsentTokensSectionMeansNothingIsEnabled() throws {
+        let config = try decode(#"{"services":{"github":[{"owner":"o","repo":"r"}]}}"#)
+        XCTAssertTrue(config.tokens.isEmpty)
+        XCTAssertFalse(config.expandedSources[0].usesToken)
+    }
+
+    /// `false` and an explicit null both mean off, and must not read as enabled.
+    func testFalseAndNullMeanDisabled() throws {
+        let off = try decode(#"{"tokens":{"github":false,"vercel":null}}"#)
+        XCTAssertFalse(off.tokens.isEnabled(.github))
+        XCTAssertFalse(off.tokens.isEnabled(.vercel))
+        XCTAssertTrue(off.tokens.isEmpty)
+    }
+
+    /// The old `"github": "GITHUB_TOKEN"` form must fail with advice naming the
+    /// replacement, since that is the most likely thing to be sitting in an
+    /// existing config file.
+    func testLegacyEnvVarFormIsRejectedWithMigrationAdvice() {
+        let json = #"{"tokens":{"github":"GITHUB_TOKEN"}}"#
+        XCTAssertThrowsError(try decode(json)) { error in
+            XCTAssertEqual(error as? ConfigError,
+                           .legacyEnvToken(service: "github", variable: "GITHUB_TOKEN"))
+            let message = (error as? LocalizedError)?.errorDescription ?? ""
+            XCTAssertTrue(message.contains("true"), "should name the replacement: \(message)")
+            XCTAssertTrue(message.contains("--store-token github"), message)
+        }
+    }
+
+    /// Anything else in the tokens section is a mistake. Guessing would leave
+    /// the user with a config that looks right and does nothing.
+    func testUnrecognisedTokenValueIsRejected() {
+        XCTAssertThrowsError(try decode(#"{"tokens":{"github":42}}"#)) { error in
+            guard case .unknownServiceKey(let section, let key)? = error as? ConfigError else {
+                return XCTFail("expected unknownServiceKey, got \(error)")
+            }
+            XCTAssertEqual(section, "tokens")
+            XCTAssertTrue(key.contains("github"), key)
+        }
+    }
+
+    /// A round trip must keep the opt-in, or saving would quietly switch a
+    /// service off and the app would report it unreachable.
+    func testEnabledServicesSurviveSaveAndLoad() throws {
+        let original = Config(
+            tokens: Config.Tokens(github: true, sentry: true),
+            services: Config.Services(github: [.init(owner: "o", repo: "r")])
+        )
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cistatus-kc-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try original.save(to: url)
+        let reloaded = try Config.load(from: url)
+        XCTAssertEqual(reloaded.tokens.enabledServices, [.github, .sentry])
+        XCTAssertTrue(reloaded.expandedSources[0].usesToken)
+    }
+
+    /// A disabled service must not read a stored token even when one exists,
+    /// or switching it off would appear to do nothing.
+    func testDisabledServiceReadsNoToken() {
+        let source = Source(kind: .github, name: "x", usesToken: false)
+        XCTAssertNil(source.token())
+    }
+
+    /// Saving must round trip, or the settings window would quietly rewrite the
+    /// config into something the app cannot read back.
+    func testSaveThenLoadRoundTrips() throws {
+        let original = Config(
+            pollIntervalSeconds: 45,
+            tokens: Config.Tokens(github: true, vercel: true),
+            services: Config.Services(
+                github: [.init(owner: "o", repo: "api", branches: ["main"], strategy: .actions)],
+                vercel: [.init(projectId: "p1", teamId: "t1", branches: ["main"], name: "Web")],
+                sentry: [.init(org: "o", project: "p", newWithinHours: 6)]
+            )
+        )
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cistatus-roundtrip-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try original.save(to: url)
+        let reloaded = try Config.load(from: url)
+        XCTAssertEqual(reloaded.pollIntervalSeconds, 45)
+        XCTAssertEqual(reloaded.tokens, original.tokens)
+        XCTAssertEqual(reloaded.services, original.services)
+        XCTAssertEqual(reloaded.expandedSources.map(\.name), original.expandedSources.map(\.name))
+    }
+
+    /// An empty config saved by the window should not be littered with empty
+    /// sections, or hand editing it later becomes guesswork.
+    func testSavedFileOmitsEmptySections() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cistatus-empty-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try Config().save(to: url)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(text.contains("\"services\""), text)
+        XCTAssertFalse(text.contains("\"tokens\""), text)
+    }
+
+    /// A misspelled provider or token key must be loud. Silently ignoring it
+    /// leaves a config that looks correct and watches nothing, which is the
+    /// hardest kind of mistake to notice.
+    func testMisspelledServiceKeyIsRejected() {
+        XCTAssertThrowsError(try decode(#"{"services":{"githbu":[]}}"#)) { error in
+            XCTAssertEqual(error as? ConfigError, .unknownServiceKey(section: "services", key: "githbu"))
+        }
+    }
+
+    func testMisspelledTokenKeyIsRejected() {
+        XCTAssertThrowsError(try decode(#"{"tokens":{"githbu":"X"}}"#)) { error in
+            XCTAssertEqual(error as? ConfigError, .unknownServiceKey(section: "tokens", key: "githbu"))
+        }
+    }
+
+    func testMisspelledTopLevelKeyIsRejected() {
+        XCTAssertThrowsError(try decode(#"{"pollInterval": 60}"#)) { error in
+            XCTAssertEqual(error as? ConfigError, .unknownKey("pollInterval"))
+        }
+    }
+
+    /// The error text is all the user sees when their config will not load, so
+    /// it has to name the section and say what is valid.
+    func testUnknownKeyErrorNamesTheValidKeys() {
+        let message = ConfigError.unknownServiceKey(section: "services", key: "githbu")
+            .errorDescription ?? ""
+        XCTAssertTrue(message.contains("githbu"), message)
+        XCTAssertTrue(message.contains("github"), message)
     }
 
     // MARK: - Response decoding
