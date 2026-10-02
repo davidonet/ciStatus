@@ -12,11 +12,24 @@ cd "$(dirname "$0")/.."
 CONFIG="${CONFIG:-release}"
 APP_NAME="CIStatus"
 BUNDLE_ID="dev.dolivari.ciStatus"
-BUILD_DIR=".build/$CONFIG"
 OUTPUT="${1:-build/$APP_NAME.app}"
 
+# Ask SwiftPM where it put the products rather than guessing. .build/release is
+# only a convenience symlink, and it is not always there: a fresh checkout built
+# by a different toolchain, or a build driven through the XCBuild path, can leave
+# the real output in .build/out/Products/Release with no symlink at all, which
+# made this script fail on CI with "No release binary" right after a build that
+# had actually succeeded.
+BUILD_DIR="$(swift build -c "$CONFIG" --show-bin-path 2>/dev/null | tail -1 || true)"
+if [ -z "$BUILD_DIR" ] || [ ! -d "$BUILD_DIR" ]; then
+  BUILD_DIR=".build/$CONFIG"
+fi
+
 if [ ! -x "$BUILD_DIR/$APP_NAME" ]; then
-  echo "No $CONFIG binary. Run: swift build -c $CONFIG"
+  echo "No $CONFIG binary in $BUILD_DIR. Run: swift build -c $CONFIG" >&2
+  # Print the build directory contents: a wrong path here is otherwise very
+  # hard to diagnose from CI logs, where the build itself has already succeeded.
+  ls -la "$BUILD_DIR" 2>&1 | head -20 >&2 || true
   exit 1
 fi
 
