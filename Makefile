@@ -17,6 +17,8 @@ help:
 	@echo "make probe      print what the app would show for your config"
 	@echo "make install    install to $(INSTALL_DIR)"
 	@echo "make uninstall  remove it from $(INSTALL_DIR)"
+	@echo "make doctor     say what is stored, what is enabled and what is missing"
+	@echo "make icon       regenerate Resources/AppIcon.icns"
 	@echo "make clean      remove build products"
 
 .PHONY: all
@@ -77,6 +79,10 @@ doctor:
 	@./.build/debug/probe --tokens
 	@echo
 	@echo "Log: ~/Library/Logs/CIStatus/ciStatus.log"
+
+.PHONY: icon
+icon:
+	@swift Scripts/make-icon.swift Resources/AppIcon.icns
 
 .PHONY: clean
 clean:

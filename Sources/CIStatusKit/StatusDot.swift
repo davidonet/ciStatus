@@ -31,7 +31,13 @@ public enum StatusDot {
         case .ok:      return .systemGreen
         case .pending: return .systemOrange
         case .failing: return .systemRed
-        case .unknown: return .secondaryLabelColor
+        // Not `secondaryLabelColor`: that is a translucent label colour, which
+        // resolves to white at 55% alpha. A dot survives that because it is a
+        // solid circle, but a symbol is thin strokes, and baking it at 55% white
+        // left rows with no icon at all on a light menu — depending on which
+        // appearance happened to be current when it rasterised. This is opaque
+        // and still reads as grey in both appearances.
+        case .unknown: return .systemGray
         }
     }
 

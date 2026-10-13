@@ -65,6 +65,18 @@ mkdir -p "$OUTPUT/Contents/MacOS" "$OUTPUT/Contents/Resources"
 
 cp "$BUILD_DIR/$APP_NAME" "$OUTPUT/Contents/MacOS/$APP_NAME"
 
+# The icon is drawn by Scripts/make-icon.swift and committed as a build input.
+# CFBundleIconFile only looks in Contents/Resources, so the icon cannot ride
+# along in the SwiftPM resource bundle the way config.example.json does.
+ICON_NAME=""
+if [ -f "Resources/AppIcon.icns" ]; then
+  ICON_NAME="AppIcon.icns"
+  cp "Resources/AppIcon.icns" "$OUTPUT/Contents/Resources/$ICON_NAME"
+else
+  echo "warning: Resources/AppIcon.icns is missing; the app will have no icon."
+  echo "         Run 'make icon' to regenerate it."
+fi
+
 # SwiftPM emits resources as a sibling bundle; the app loads it from Resources.
 if [ -d "$BUILD_DIR/${APP_NAME}_${APP_NAME}.bundle" ]; then
   cp -R "$BUILD_DIR/${APP_NAME}_${APP_NAME}.bundle" "$OUTPUT/Contents/Resources/"
@@ -86,6 +98,13 @@ if ! [[ "$SHORT_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
   SHORT_VERSION="0.0.0"
 fi
 
+# Only emitted when the icon was actually found: an empty CFBundleIconFile is
+# worse than none, and Finder treats it as a broken bundle.
+ICON_PLIST=""
+if [ -n "$ICON_NAME" ]; then
+  ICON_PLIST="  <key>CFBundleIconFile</key>               <string>$ICON_NAME</string>"
+fi
+
 cat > "$OUTPUT/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -100,6 +119,7 @@ cat > "$OUTPUT/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key>             <string>APPL</string>
   <key>CFBundleShortVersionString</key>      <string>$SHORT_VERSION</string>
   <key>CFBundleVersion</key>                 <string>$VERSION</string>
+$ICON_PLIST
   <!-- No Dock icon and no app menu: this is a menu bar extra. -->
   <key>LSUIElement</key>                     <true/>
   <key>NSHighResolutionCapable</key>         <true/>

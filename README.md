@@ -539,6 +539,7 @@ Sources/CIStatusKit/    all the logic, so it is testable without an app bundle
   SentryProvider.swift
   Monitor.swift         the poll loop
   StatusDot.swift       draws the coloured dot
+  StatusSymbol.swift    the per-row symbol, cached and pre-tinted
   Discovery.swift       lists repos, branches and projects for the settings UI
   Log.swift             file logging, with token redaction
 Sources/CIStatus/       the SwiftUI menu bar extra and settings window
@@ -547,8 +548,10 @@ Sources/CIStatus/       the SwiftUI menu bar extra and settings window
   TargetEditorSheet.swift adding a target, or editing one already configured
 Sources/probe/          terminal front end, plus `--doctor`-style diagnosis
 Sources/probe3/         menu bar pixel classifier used by the e2e check
-Tests/CIStatusTests/    144 tests; the providers are tested against stubbed HTTP
+Tests/CIStatusTests/    154 tests; the providers are tested against stubbed HTTP
 docs/                   screenshots and the generated colour legend
+Scripts/make-icon.swift draws Resources/AppIcon.icns
+Resources/AppIcon.icns  build input, copied into the bundle by build-app.sh
 ```
 
 ## Notes
@@ -556,6 +559,16 @@ docs/                   screenshots and the generated colour legend
 - Menu bar icons are drawn as template images, which discard colour, so
   `StatusDot` bakes the tint into the pixels with `isTemplate = false`. A plain
   SF Symbol would render black no matter what colour you apply.
+- The grey state is `systemGray`, not `secondaryLabelColor`. The latter is a
+  translucent label colour — white at 55% alpha — so the symbol baked in almost
+  invisibly and rows intermittently lost their icon depending on which
+  appearance was current. `StatusSymbol` resolves each symbol once and bakes the
+  tint, which stops the menu drawing it as a mask; both are asserted in
+  `StatusSymbolTests`, because neither failure shows up as an error anywhere.
+- Symbols come in two flavours on purpose. The menu rows are baked and
+  non-template, because a menu is free to draw a template image as a mask. The
+  settings window keeps them template so they still follow light and dark —
+  baking those would have frozen the window chrome to one appearance.
 - The Actions fallback filters workflow runs by `head_sha`, not by `branch`.
   Filtering by branch alone returns every commit ever pushed to it, so a
   failure from last month would keep the dot red forever.

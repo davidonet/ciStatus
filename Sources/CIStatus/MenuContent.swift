@@ -85,8 +85,10 @@ struct Row: View {
             if let url = status.url { NSWorkspace.shared.open(url) }
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: status.health.symbolName)
-                    .foregroundStyle(status.health.tint)
+                // Resolved and cached, not `Image(systemName:)`: that hands the
+                // menu a template image it may draw as a mask, and the row loses
+                // its icon. See StatusSymbol.
+                Image(nsImage: StatusSymbol.image(for: status.health))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(status.name).fontWeight(.medium)
                     Text(status.summary).font(.caption).foregroundStyle(.secondary)

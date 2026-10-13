@@ -325,7 +325,15 @@ private struct ServiceBox<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label(kind.displayName, systemImage: icon).font(.subheadline.weight(.semibold))
+                Label {
+                    Text(kind.displayName)
+                } icon: {
+                    // Cached rather than `Label(systemImage:)`, which looks the
+                    // symbol up on every draw. Left a template so it still
+                    // follows the window's appearance. See StatusSymbol.
+                    Image(nsImage: StatusSymbol.template(icon, size: 11, weight: .semibold))
+                }
+                .font(.subheadline.weight(.semibold))
                 Spacer()
                 Button("Add manually…", action: onManual)
                 Button("Browse…", action: onPick)
@@ -399,7 +407,7 @@ private struct TargetRow: View {
             Button("Edit…", action: onEdit)
                 .font(.caption)
             Button(role: .destructive, action: onRemove) {
-                Image(systemName: "trash").font(.caption)
+                Image(nsImage: StatusSymbol.template("trash", size: 10)).font(.caption)
             }
             .buttonStyle(.borderless)
         }
@@ -488,7 +496,7 @@ private struct RepoPicker: View {
                     HStack {
                         Text(repo.id)
                         Spacer()
-                        Image(systemName: "plus.circle")
+                        Image(nsImage: StatusSymbol.template("plus.circle", size: 13))
                     }
                 }
                 .buttonStyle(.plain)
@@ -542,8 +550,13 @@ private struct BranchPicker: View {
                         toggle(branch)
                     } label: {
                         HStack {
-                            Image(systemName: watched.contains(branch) ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(watched.contains(branch) ? Color.green : Color.secondary)
+                            // Baked rather than tinted: an unchecked branch is
+                            // thin strokes in a muted colour, which is exactly
+                            // what disappeared from the menu rows.
+                            Image(nsImage: StatusSymbol.baked(
+                                watched.contains(branch) ? "checkmark.circle.fill" : "circle",
+                                color: watched.contains(branch) ? .systemGreen : .systemGray,
+                                size: 13))
                             Text(branch)
                             Spacer()
                         }
@@ -613,7 +626,7 @@ private struct ProjectPicker: View {
                             Text(project.slug ?? project.id)
                                 .font(.caption).foregroundStyle(.secondary)
                             Spacer()
-                            Image(systemName: "plus.circle")
+                            Image(nsImage: StatusSymbol.template("plus.circle", size: 13))
                         }
                     }
                     .buttonStyle(.plain)
