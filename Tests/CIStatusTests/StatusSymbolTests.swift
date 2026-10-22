@@ -89,7 +89,10 @@ final class StatusSymbolTests: XCTestCase {
                     let score = max(c.redComponent, c.greenComponent, c.blueComponent)
                         - min(c.redComponent, c.greenComponent, c.blueComponent)
                     if best == nil || score > best!.score {
-                        best = (c.redComponent, c.greenComponent, c.blueComponent, score)
+                        // Explicit Double: older toolchains (the CI runner's) do not
+                        // convert CGFloat to Double inside a tuple literal.
+                        best = (Double(c.redComponent), Double(c.greenComponent),
+                                Double(c.blueComponent), Double(score))
                     }
                 }
             }
